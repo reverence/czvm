@@ -16,6 +16,7 @@ czvm
 
 支持处理println函数
 
+需要在根目录下创建目录log,cd /, mkdir log
 运行方式:./czvm -cp test Calculate,输出如下:
 8
 -2
