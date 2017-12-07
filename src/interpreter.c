@@ -2194,10 +2194,110 @@ int jvm_interp_invokestatic(u2 len, char *code_name, void *info)
 		//vm_pc.pc += len;
 	return 0;
 }
+class_method* get_interface_method(u2 index)
+{
+	u2 class_index = ((constant_interface_info*)(cur_interpreter_env->cp_info[index].info))->class_index;
+	u2 desc_index = ((constant_interface_info*)(cur_interpreter_env->cp_info[index].info))->name_and_type_index;
+	class_index = ((constant_class_info*)(cur_interpreter_env->cp_info[class_index].info))->name_index;
+	char* class_name = ((constant_utf8_info*)(cur_interpreter_env->cp_info[class_index].info))->bytes;
+	if(0 == strcmp("java/lang/Object",class_name))
+	{
+		return NULL;
+	}
+	u2 name_index = ((constant_name_type_info*)(cur_interpreter_env->cp_info[desc_index].info))->name_index;
+	desc_index = ((constant_name_type_info*)(cur_interpreter_env->cp_info[desc_index].info))->descriptor_index;
+	char* method_name = ((constant_utf8_info*)(cur_interpreter_env->cp_info[name_index].info))->bytes;
+	char* desc_name = ((constant_utf8_info*)(cur_interpreter_env->cp_info[desc_index].info))->bytes;
+
+	class_method* method = find_class_method(&class_list_head,class_name,method_name,desc_name);
+	if(!method)
+	{
+		CLASS* newClass = jvm_load_class(jvmargs->classpath,class_name);
+		if(!newClass)
+		{
+			return NULL;
+		}
+		method = find_class_method(&class_list_head,class_name,method_name,desc_name);
+	}
+
+	return method;
+}
+
 int jvm_interp_invokeinterface(u2 len, char *code_name, void *info)
 {
 	print_interp_info(code_name);
+
+	u2 index = ((*(u1 *)(info + 1)) << 8) | (*(u1 *)(info + 2));
+	/**
+	 * get class method
+	 */
+	class_method* method = get_interface_method(index);
+	if(!method)
+	{
+		//not found,skip
 		vm_pc.pc += len;
+		return 0;
+	}
+	/**
+	 * get args
+	 */
+	char* desc = ((constant_utf8_info*)(method->klass->cp_info[method->descriptor_index].info))->bytes;
+	int arg_size = get_arg_size(desc);
+
+	long* value = get_invoke_args(arg_size);
+	long v;
+	pop_operand_stack(long,v);
+	jvm_obj* obj = (jvm_obj*)v;
+	if(!obj)
+		exit(1);
+	/**
+	 * record prev stack frame
+	 */
+	jvm_stack_frame* prev_frame = copy_stack_frame(cur_stack_frame);
+
+	int id;
+	for(id=0;id<obj->class->methods_count;id++){
+		class_method* real_method = obj->class->methods+id;
+		if(0 == strcmp(real_method->method_name,method->method_name)){
+			char* desc_name = ((constant_utf8_info*)(real_method->klass->cp_info[real_method->descriptor_index].info))->bytes;
+			if(0 == strcmp(desc_name,desc)){
+				method = real_method;
+				break;
+			}
+		}
+	}
+
+	cur_stack_frame = method->method_code->current_frame;
+	cur_stack_frame->return_address = vm_pc.pc+len;
+	cur_stack_frame->prev = prev_frame;
+
+	/**
+	 * record prev env
+	 */
+	interpreter_env* prev_env = copy_interp_env(cur_interpreter_env);
+	cur_interpreter_env->cp_info = method->klass->cp_info;
+	cur_interpreter_env->prev = prev_env;
+
+	vm_pc.pc = method->method_code->code;
+
+	/**
+	 * set args
+	 */
+	set_local_table(long,0,obj);
+	u2 idx;
+	for(idx=1;idx<=arg_size;idx++)
+	{
+		set_local_table(long,idx,(*(value+idx-1)));
+	}
+
+	if(value != NULL){
+		free(value);
+	}
+
+	if(0 != interpreter_byte_code(method))
+		exit(1);
+
+		//vm_pc.pc += len;
 	return 0;
 }
 int jvm_interp_invokedynamic(u2 len, char *code_name, void *info)
